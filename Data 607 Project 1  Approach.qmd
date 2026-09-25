@@ -1,0 +1,31 @@
+---
+title: "Project 1: Approach"
+author: "Chanice McKenzie"
+format:
+  html:
+    toc: true
+  pdf:
+    toc: true
+---
+
+## Introduction
+
+For Project 1, I will use the provided chess tournament text file and transform its semi-structured results into a clean, analysis-ready dataset. The final output will contain one row for each player and the required fields: **Player Name, State, Total Points, Pre-Rating, and Average Pre-Tournament Rating of Opponents**. The cleaned data will ultimately be written to a CSV file that could be imported into a database or used for additional analysis.
+
+## Planned Approach
+
+My first step will be to read the tournament text file into R while preserving the structure of the original lines. The file is not organized like a standard rectangular dataset. Instead, each player's information is spread across two lines: the first contains the player's pair number, name, total points, and round results, while the second contains the player's state, USCF ID, and pre- and post-tournament ratings.
+
+I plan to identify the repeating player records and extract the required information from each record. For each player, I will capture the player's name, state, total points, and pre-tournament rating. I will also extract the opponent pair numbers from the round-result fields. These opponent numbers can then be matched back to the corresponding players in the tournament data so that I can retrieve each opponent's pre-tournament rating.
+
+After matching the opponents to their ratings, I will calculate the average opponent pre-rating for each player. Only rounds in which an actual opponent is identified will be included in this calculation. Finally, I will combine the extracted and calculated fields into one tidy data frame, check the results for accuracy, and export the final table as a CSV file.
+
+## Anticipated Data Challenges
+
+The main challenge is that the source file is semi-structured rather than a standard CSV or spreadsheet. Player information is split across multiple lines, and the round columns combine a result code with an opponent's pair number. This means I will need to separate useful values from formatting characters and other text.
+
+Another challenge is that not every round represents a normal game against another listed player. Some round entries contain letters without an opponent number, so I will need to distinguish actual opponent pair numbers from these non-opponent entries before calculating average opponent ratings. I will avoid assigning an opponent rating when no opponent number is present.
+
+Pre-tournament ratings also do not all have identical formatting. For example, some ratings include additional provisional-rating notation, so I will need to extract the numeric pre-rating consistently without confusing it with the post-rating or other numbers in the same line.
+
+Finally, the average opponent rating depends on correctly connecting each opponent pair number to that player's pre-tournament rating. I plan to validate this step with the example provided in the assignment. For Gary Hua, the listed opponents are pair numbers 39, 21, 18, 14, 7, 12, and 4, so the calculation should use those opponents' pre-tournament ratings and reproduce the expected average of approximately **1605**.
