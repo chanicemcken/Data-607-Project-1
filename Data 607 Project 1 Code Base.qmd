@@ -1,0 +1,284 @@
+---
+title: "Project 1"
+author: "Chanice McKenzie"
+format:
+  html:
+    toc: true
+  pdf:
+    toc: true
+---
+
+## Introduction
+
+For Project 1, I will use the provided chess tournament text file and transform its semi-structured results into a clean, analysis-ready dataset. The final output will contain one row for each player and the required fields: **Player Name, State, Total Points, Pre-Rating, and Average Pre-Tournament Rating of Opponents**. The cleaned data will ultimately be written to a CSV file that could be imported into a database or used for additional analysis.
+
+## Planned Approach
+
+My first step will be to read the tournament text file into R while preserving the structure of the original lines. The file is not organized like a standard rectangular dataset. Instead, each player's information is spread across two lines: the first contains the player's pair number, name, total points, and round results, while the second contains the player's state, USCF ID, and pre- and post-tournament ratings.
+
+I plan to identify the repeating player records and extract the required information from each record. For each player, I will capture the player's name, state, total points, and pre-tournament rating. I will also extract the opponent pair numbers from the round-result fields. These opponent numbers can then be matched back to the corresponding players in the tournament data so that I can retrieve each opponent's pre-tournament rating.
+
+After matching the opponents to their ratings, I will calculate the average opponent pre-rating for each player. Only rounds in which an actual opponent is identified will be included in this calculation. Finally, I will combine the extracted and calculated fields into one tidy data frame, check the results for accuracy, and export the final table as a CSV file.
+
+## Anticipated Data Challenges
+
+The main challenge is that the source file is semi-structured rather than a standard CSV or spreadsheet. Player information is split across multiple lines, and the round columns combine a result code with an opponent's pair number. This means I will need to separate useful values from formatting characters and other text.
+
+Another challenge is that not every round represents a normal game against another listed player. Some round entries contain letters without an opponent number, so I will need to distinguish actual opponent pair numbers from these non-opponent entries before calculating average opponent ratings. I will avoid assigning an opponent rating when no opponent number is present.
+
+Pre-tournament ratings also do not all have identical formatting. For example, some ratings include additional provisional-rating notation, so I will need to extract the numeric pre-rating consistently without confusing it with the post-rating or other numbers in the same line.
+
+Finally, the average opponent rating depends on correctly connecting each opponent pair number to that player's pre-tournament rating. I plan to validate this step with the example provided in the assignment. For Gary Hua, the listed opponents are pair numbers 39, 21, 18, 14, 7, 12, and 4, so the calculation should use those opponents' pre-tournament ratings and reproduce the expected average of approximately **1605**.
+
+## Business and Data Questions
+
+The practical goal of this project is to convert a semi-structured chess tournament cross-table into a clean player-level dataset that can be reused in a database or later analysis. The corresponding data question is: **For each player, what are the player's name, state, total points, pre-tournament rating, and average pre-tournament rating of the opponents they actually played?**
+
+The workflow below follows the plan described above. I first import the raw text from a public URL, identify the two-line player records, extract the required fields, connect opponent pair numbers to player ratings, validate the calculations, and then export the final result as a CSV file.
+
+## Setup
+
+I use `tidyverse` for string processing, reshaping, joins, and data export. The code also defines the URL for the tournament text file so that the analysis does not depend on a local file path.
+
+```{r}
+library(tidyverse)
+
+data_url <- "https://raw.githubusercontent.com/chanicemcken/Data-607-Project-1/main/tournamentinfo.txt"
+```
+
+## Import the Tournament Data
+
+The tournament file is stored as plain text rather than as a rectangular table. I read the file one line at a time so that the original structure is preserved before parsing.
+
+```{r}
+if (grepl("^PASTE_", data_url)) {
+  stop(
+    "https://raw.githubusercontent.com/chanicemcken/Data-607-Project-1/main/tournamentinfo.txt"
+  )
+}
+
+tournament_lines <- readLines(data_url, warn = FALSE)
+
+# Basic reproducibility checks
+stopifnot(length(tournament_lines) > 0)
+stopifnot(any(str_detect(tournament_lines, "GARY HUA")))
+```
+
+## Identify Player Records
+
+Each player occupies two consecutive lines. The first line begins with a numeric pair number and contains the player's name, total points, and round results. The second line begins with a state abbreviation and contains the player's USCF information and rating.
+
+Instead of relying on fixed row numbers, I identify player rows from their content. This makes the workflow less dependent on the exact placement of separator and header lines.
+
+```{r}
+player_line_index <- which(
+  str_detect(tournament_lines, "^\\s*\\d+\\s*\\|")
+)
+
+rating_line_index <- player_line_index + 1
+
+stopifnot(all(rating_line_index <= length(tournament_lines)))
+
+player_lines <- tournament_lines[player_line_index]
+rating_lines <- tournament_lines[rating_line_index]
+
+# The supplied tournament contains 64 players.
+stopifnot(length(player_lines) == 64)
+stopifnot(length(rating_lines) == 64)
+```
+
+## Parse Player Information
+
+The pipe character separates the major fields on each player line. I extract the pair number, player name, total points, and seven round-result fields from the first line. State and pre-rating are extracted from the second line.
+
+The pre-rating extraction intentionally takes only the numeric value immediately following `R:`. This handles provisional ratings such as `1641P17` without treating the provisional notation or post-tournament rating as part of the pre-rating.
+
+```{r}
+split_player_line <- function(line) {
+  fields <- str_split(line, "\\|", simplify = TRUE)
+  str_trim(fields)
+}
+
+player_parts <- map(player_lines, split_player_line)
+
+players <- tibble(
+  Pair_Number = map_int(player_parts, ~ as.integer(.x[1])),
+  Player_Name = map_chr(player_parts, ~ .x[2]),
+  Total_Points = map_dbl(player_parts, ~ as.numeric(.x[3])),
+  Round_1 = map_chr(player_parts, ~ .x[4]),
+  Round_2 = map_chr(player_parts, ~ .x[5]),
+  Round_3 = map_chr(player_parts, ~ .x[6]),
+  Round_4 = map_chr(player_parts, ~ .x[7]),
+  Round_5 = map_chr(player_parts, ~ .x[8]),
+  Round_6 = map_chr(player_parts, ~ .x[9]),
+  Round_7 = map_chr(player_parts, ~ .x[10]),
+  State = str_extract(rating_lines, "^\\s*[A-Z]{2}") |> str_trim(),
+  Pre_Rating = str_match(rating_lines, "R:\\s*(\\d+)")[, 2] |> as.integer()
+)
+
+players |> 
+  select(Pair_Number, Player_Name, State, Total_Points, Pre_Rating) |> 
+  head()
+```
+
+## Extract Opponent Pair Numbers
+
+Each normal round result combines a result code with an opponent's pair number, such as `W 39`, `L 8`, or `D 12`. Other entries such as `H`, `B`, `U`, or `X` do not identify an opponent. I therefore extract a number only when one is present and leave the other entries as missing values.
+
+I reshape the seven round columns into a long format because this makes it easier to connect every opponent pair number with the opponent's pre-rating.
+
+```{r}
+opponents_long <- players |>
+  select(
+    Pair_Number,
+    Player_Name,
+    starts_with("Round_")
+  ) |>
+  pivot_longer(
+    cols = starts_with("Round_"),
+    names_to = "Round",
+    values_to = "Round_Result"
+  ) |>
+  mutate(
+    Opponent_Pair = str_extract(Round_Result, "\\d+") |> as.integer()
+  )
+
+opponents_long |> head(14)
+```
+
+## Match Opponents to Their Pre-Ratings
+
+The pair number works as the key connecting a round result to another player's tournament record. I create a lookup table containing pair numbers and pre-ratings, then join that table to the extracted opponent pair numbers.
+
+Rounds without an opponent number remain missing and are excluded later when calculating the mean.
+
+```{r}
+rating_lookup <- players |>
+  select(
+    Opponent_Pair = Pair_Number,
+    Opponent_Pre_Rating = Pre_Rating
+  )
+
+opponents_rated <- opponents_long |>
+  left_join(
+    rating_lookup,
+    by = "Opponent_Pair"
+  )
+
+# Every non-missing opponent pair number should match a player.
+stopifnot(
+  all(
+    !is.na(
+      opponents_rated$Opponent_Pre_Rating[
+        !is.na(opponents_rated$Opponent_Pair)
+      ]
+    )
+  )
+)
+```
+
+## Calculate Average Opponent Pre-Rating
+
+For each player, I calculate the mean of the pre-tournament ratings for opponents who were actually identified in the round results. Missing opponent entries are removed from the calculation rather than treated as zero because they represent rounds without a listed opponent, not opponents with a rating of zero.
+
+```{r}
+average_opponent_rating <- opponents_rated |>
+  group_by(Pair_Number) |>
+  summarise(
+    Average_Opponent_Pre_Rating = mean(
+      Opponent_Pre_Rating,
+      na.rm = TRUE
+    ),
+    Opponents_Played = sum(!is.na(Opponent_Pair)),
+    .groups = "drop"
+  )
+```
+
+## Create the Final Dataset
+
+The required output contains one row per player. I join the calculated opponent average back to the player information and round the average to the nearest whole-number rating, which reproduces the format shown in the assignment example.
+
+```{r}
+final_chess_data <- players |>
+  select(
+    Pair_Number,
+    Player_Name,
+    State,
+    Total_Points,
+    Pre_Rating
+  ) |>
+  left_join(
+    average_opponent_rating,
+    by = "Pair_Number"
+  ) |>
+  mutate(
+    Average_Opponent_Pre_Rating = round(
+      Average_Opponent_Pre_Rating
+    )
+  ) |>
+  select(
+    Player_Name,
+    State,
+    Total_Points,
+    Pre_Rating,
+    Average_Opponent_Pre_Rating
+  )
+
+final_chess_data |> head(10)
+```
+
+## Validation
+
+Before exporting the results, I verify the example provided in the assignment. Gary Hua played pair numbers 39, 21, 18, 14, 7, 12, and 4. Their pre-tournament ratings are 1436, 1563, 1600, 1610, 1649, 1663, and 1716. Their mean is approximately 1605.29, which rounds to the expected value of 1605.
+
+I also use `stopifnot()` so that the document will stop rendering if the key values for the Gary Hua example are not reproduced.
+
+```{r}
+gary_opponents <- opponents_rated |>
+  filter(
+    Player_Name == "GARY HUA",
+    !is.na(Opponent_Pair)
+  ) |>
+  select(
+    Round,
+    Opponent_Pair,
+    Opponent_Pre_Rating
+  )
+
+gary_opponents
+
+gary_check <- final_chess_data |>
+  filter(Player_Name == "GARY HUA")
+
+gary_check
+
+stopifnot(gary_check$State == "ON")
+stopifnot(gary_check$Total_Points == 6.0)
+stopifnot(gary_check$Pre_Rating == 1794)
+stopifnot(gary_check$Average_Opponent_Pre_Rating == 1605)
+stopifnot(nrow(final_chess_data) == 64)
+```
+
+## Export the CSV
+
+The final step writes the cleaned player-level dataset to a CSV file. The exported file contains only the five fields requested in the project requirements and can be imported into a database or used in another analysis.
+
+```{r}
+write_csv(
+  final_chess_data,
+  "chess_tournament_results.csv"
+)
+```
+
+## Conclusions
+
+The tournament cross-table can be transformed into a clean dataset by using the pair number as the connection between each player's round results and the ratings of their opponents. The final dataset contains the player's name, state, total points, pre-tournament rating, and average opponent pre-tournament rating for all 64 players. The validation step reproduces the assignment's Gary Hua example, providing a check that the opponent matching and average calculation are working as intended.
+
+One limitation is that the parsing logic depends on the general structure of this tournament cross-table, including the pipe-delimited player rows and the `R:` label used for ratings. A useful extension would be to test the workflow on additional tournament files to determine whether the parsing rules remain reliable when formatting varies. The analysis could also be extended by comparing tournament points with player ratings or average opponent strength, but those analyses are beyond the required CSV output for this project.
+
+# Citations
+
+OpenAI. (2026). ChatGPT (Version 5.6) [Large language model].
+https://chat.openai.com. Accessed September 26, 2026.
+
+[LLM Transcript](https://chatgpt.com/share/6ab95565-e080-83ea-bf75-a8eadffc77da)
